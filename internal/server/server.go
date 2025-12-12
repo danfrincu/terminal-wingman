@@ -141,8 +141,11 @@ func (s *Server) startStdioServer() error {
 	select {
 	case <-sigChan:
 		log.Println("Received shutdown signal")
+		// Close stdin to unblock scanner
+		os.Stdin.Close()
 	case <-s.shutdown:
 		log.Println("Shutdown requested")
+		os.Stdin.Close()
 	}
 
 	return s.Stop()
