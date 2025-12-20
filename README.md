@@ -218,7 +218,7 @@ curl -X POST http://localhost:8080/mcp/tools/read_scrollback -d '{"window_id": "
 curl -X POST http://localhost:8080/mcp/tools/use_window -d '{"window_id": "11"}'
 ```
 
-## Differences from ssh-wingman
+## Features of terminal-wingman
 
 1. **Read-only by default**: Only `use_window` modifies state
 2. **Safer execution**: Uses `screen -X hardcopy` for content capture
