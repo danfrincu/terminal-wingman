@@ -15,8 +15,18 @@ A read-only terminal access MCP (Model Context Protocol) server for GNU `screen`
 
 ## Installation
 
+### Option 1: Pre-built Binaries (Recommended)
+1. Download the latest release for your OS from the [Releases page](../../releases).
+2. Extract the archive (e.g., `tar -xzf terminal-wingman_Linux_x86_64.tar.gz`).
+3. Move the binary to a location in your PATH:
 ```bash
-cd ~/git/terminal-wingman
+sudo mv terminal-wingman /usr/local/bin/
+```
+
+### Option 2: Build from Source
+```bash
+git clone [https://github.com/danfrincu/terminal-wingman.git](https://github.com/danfrincu/terminal-wingman.git)
+cd terminal-wingman
 go mod tidy
 go build -o terminal-wingman ./cmd
 ```
@@ -33,14 +43,14 @@ go build -o terminal-wingman ./cmd
 ./terminal-wingman \
   --session work \
   --auth-type token \
-  --auth-username dan \
+  --auth-username <your_user_here> \
   --auth-token <your_token>
 ```
 
 ### Generate Authentication Token
 
 ```bash
-./terminal-wingman --auth-generate-token --auth-username dan
+./terminal-wingman --auth-generate-token --auth-username <your_user_here>
 ```
 
 ### Stdio Transport (for Cursor, Claude Code, Windsurf)
@@ -125,6 +135,8 @@ curl -X POST http://localhost:8080/mcp/tools/use_window \
   -d '{"window_id": "12"}'
 ```
 
+# IDE Integration
+
 ## Cursor Integration
 
 Add to your `~/.cursor/mcp.json`:
@@ -133,7 +145,7 @@ Add to your `~/.cursor/mcp.json`:
 {
   "mcpServers": {
     "terminal-wingman": {
-      "command": "~/git/terminal-wingman/terminal-wingman",
+      "command": "/path/to/terminal-wingman",
       "args": ["--session", "work", "--transport", "stdio"]
     }
   }
@@ -146,12 +158,74 @@ With authentication:
 {
   "mcpServers": {
     "terminal-wingman": {
-      "command": "~/git/terminal-wingman/terminal-wingman",
+      "command": "/path/to/terminal-wingman",
       "args": [
         "--session", "work",
         "--transport", "stdio",
         "--auth-type", "token",
-        "--auth-username", "dan",
+        "--auth-username", "your_user_here",
+        "--auth-token", "your_token_here"
+      ]
+    }
+  }
+}
+```
+
+## Windsurf Integration
+Add to your `~/.codeium/windsurf/mcp_config.json`
+
+```json
+{
+  "mcpServers": {
+    "terminal-wingman": {
+      "command": "terminal-wingman",
+      "args": ["--session", "work", "--transport", "stdio"]
+    }
+  }
+}
+```
+
+```json
+{
+  "mcpServers": {
+    "terminal-wingman": {
+      "command": "/path/to/terminal-wingman",
+      "args": [
+        "--session", "work",
+        "--transport", "stdio",
+        "--auth-type", "token",
+        "--auth-username", "your_user_here",
+        "--auth-token", "your_token_here"
+      ]
+    }
+  }
+}
+```
+
+## Claude Code Integration
+Add to your `~/.claude.json`
+
+```json
+{
+  "mcpServers": {
+    "terminal-wingman": {
+      "command": "terminal-wingman",
+      "args": ["--session", "work", "--transport", "stdio"]
+    }
+  }
+}
+```
+
+```json
+{
+  "mcpServers": {
+    "terminal-wingman": {
+      "command": "/path/to/terminal-wingman",
+      "args": [
+        "--session", "work",
+        "--transport", "stdio",
+        "--auth-type", "token",
+        "--auth-username", "your_user_here",
         "--auth-token", "your_token_here"
       ]
     }
