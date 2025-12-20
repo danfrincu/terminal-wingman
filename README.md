@@ -43,7 +43,7 @@ go build -o terminal-wingman ./cmd
 ./terminal-wingman --auth-generate-token --auth-username dan
 ```
 
-### Stdio Transport (for Cursor)
+### Stdio Transport (for Cursor, Claude Code, Windsurf)
 
 ```bash
 ./terminal-wingman --session work --transport stdio
