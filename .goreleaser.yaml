@@ -8,26 +8,44 @@ before:
 
 builds:
   - id: terminal-wingman
-    main: ./cmd # Points to your main entry point folder
+    main: ./cmd
     binary: terminal-wingman
     env:
       - CGO_ENABLED=0
     goos:
       - linux
       - darwin
-      # Windows is included for completeness, though 'screen' is rare there
       - windows
     goarch:
       - amd64
       - arm64
 
 archives:
-  - format: tar.gz
-    # Use zip for windows
-    format_overrides:
-      - goos: windows
-        format: zip
-    # resulting filenames: terminal-wingman_1.0.0_Linux_x86_64.tar.gz
+  # Archive for Linux and Mac (tar.gz)
+  - id: nix
+    builds:
+      - terminal-wingman
+    formats:
+      - tar.gz
+    goos:
+      - linux
+      - darwin
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+
+  # Archive for Windows (zip)
+  - id: windows
+    builds:
+      - terminal-wingman
+    formats:
+      - zip
+    goos:
+      - windows
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
