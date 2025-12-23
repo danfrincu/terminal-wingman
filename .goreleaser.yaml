@@ -21,17 +21,15 @@ builds:
       - arm64
 
 archives:
-  # Archive for Linux and Mac (tar.gz)
-  - id: nix
+  - id: default
     builds:
       - terminal-wingman
     formats:
       - tar.gz
-    goosandarch:
-      - linux_amd64
-      - linux_arm64
-      - darwin_amd64
-      - darwin_arm64
+    allow:
+      goos:
+        - linux
+        - darwin
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
@@ -46,9 +44,9 @@ archives:
       - terminal-wingman
     formats:
       - zip
-    goosandarch:
-      - windows_amd64
-      - windows_arm64
+    allow:
+      goos:
+        - windows
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
