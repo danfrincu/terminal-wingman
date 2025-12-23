@@ -27,9 +27,11 @@ archives:
       - terminal-wingman
     formats:
       - tar.gz
-    goos:
-      - linux
-      - darwin
+    goosandarch:
+      - linux_amd64
+      - linux_arm64
+      - darwin_amd64
+      - darwin_arm64
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
@@ -44,8 +46,9 @@ archives:
       - terminal-wingman
     formats:
       - zip
-    goos:
-      - windows
+    goosandarch:
+      - windows_amd64
+      - windows_arm64
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
