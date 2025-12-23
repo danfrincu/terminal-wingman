@@ -1,0 +1,115 @@
+# ------------------------------------------------------------------------------
+# TERMINAL SETTINGS
+# ------------------------------------------------------------------------------
+
+# The vt100 description does not mention "dl". *sigh*
+termcapinfo vt100 dl=5\E[M
+
+# Set the hardstatus prop on gui terms to set the titlebar/icon title
+termcapinfo xterm*|rxvt*|kterm*|Eterm* hs:ts=\E]0;:fs=\007:ds=\E]0;\007
+
+# Window list at the bottom.
+# An alternative hardstatus to display a bar at the bottom listing the
+# windownames and highlighting the current windowname in blue. (This is only
+# enabled if there is no hardstatus setting for your terminal)
+hardstatus alwayslastline
+hardstatus string '%{= kG}[                   %= %{= kw}%?%-Lw%?%{r}(%{W}%n*%f%t%?(%u)%?%{r})%{w}%?%+Lw%?%?%= %{g}%Y-%m-%d %c:%s]'
+
+# set these terminals up to be 'optimal' instead of vt100
+termcapinfo xterm*|linux*|rxvt*|Eterm* OP
+
+# Change the xterm initialization string from is2=\E[!p\E[?3;4l\E[4l\E>
+termcapinfo xterm 'is=\E[r\E[m\E[2J\E[H\E[?7h\E[?1;4;6l'
+
+# Enable non-blocking mode to better cope with flaky ssh connections.
+defnonblock on
+
+# Don't block command output if the terminal stops responding
+# (like if the ssh connection times out for example).
+nonblock on
+
+# Allow editors etc. to restore display on exit
+# rather than leaving existing text in place
+# allows you to keep what was displayed on your terminal when exiting things
+# like man, less rather than having your terminal cleared
+altscreen on
+
+defshell /bin/bash
+# so it won't seem like there is a delay when entering copy mode
+msgminwait 0
+# make search case-insensitive
+ignorecase on
+# Never, ever turn this off.
+# detach on disconnect
+autodetach on
+# skip intro
+startup_message off
+# use regular audible bell and don't tell me when bells happen in other windows
+vbell off
+bell_msg ""
+# scrollback
+defscrollback 204800
+# cleaner shell title
+shelltitle ''
+# shows your sessions in utmp
+deflogin on
+# Make screen messages stand out a little more - black on bright green.
+sorendition "+b kG"
+activity "%c activity -> %n%f %t"
+bell "%c bell -> %n%f %t^G"
+
+msgwait 2
+
+# Run everything in UTF-8.
+defutf8 on
+
+# ------------------------------------------------------------------------------
+# SCREEN KEYBINDINGS
+# ------------------------------------------------------------------------------
+
+# Remove some stupid / dangerous key bindings
+bind ^k
+bind ^\
+# Make them better
+bind \\ quit
+
+bindkey ^[x screen             # alt + x = new tab
+bindkey ^[c copy               # alt + c = scrollback mode
+bindkey ^[q prev               # alt + q = previous tab left
+bindkey ^[e next               # alt + e = next tab right
+bindkey ^[z kill               # alt + z = kill tab
+
+# Stuff the contents of the specified register into screen's input queue. If no argument is given you are prompted for a register name. The text is parsed as if it had been typed in from the user's keyboard. This command can be used to bind multiple actions to a single key.
+# Ctrl + a a n
+register n an
+# Ctrl + a a p
+register p ap
+# Ctrl + a a c
+register t ac
+# Close session window Ctrl + a a k
+register o ak
+# Alt + right
+bindkey ^[[1;3C process n
+# Alt + left
+bindkey ^[[1;3D process p
+# Alt + up
+bindkey ^[[1;3A process t
+# Alt + down
+bindkey ^[[1;3B process o
+
+chdir
+screen -t "" 0
+screen -t "" 1
+screen -t "" 2
+screen -t "" 3
+screen -t "" 4
+screen -t "" 5
+screen -t "" 6
+screen -t "" 7
+screen -t "" 8
+screen -t "" 9
+select 0
+
+# update home and end keys
+markkeys "$=\205"
+markkeys "\^=\201"

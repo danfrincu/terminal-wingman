@@ -130,22 +130,26 @@ func (s *Server) startStdioServer() error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
+	// Channel to signal stdio handler completion
+	stdioDone := make(chan struct{})
+
 	// Start stdio handler in goroutine
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 		s.handleStdio()
+		close(stdioDone)
 	}()
 
-	// Wait for shutdown signal
+	// Wait for shutdown signal or stdio handler to finish
 	select {
 	case <-sigChan:
-		log.Println("Received shutdown signal")
-		// Close stdin to unblock scanner
-		os.Stdin.Close()
+		// Received shutdown signal, let stdio handler finish naturally
+		// Don't close stdin - let EOF propagate naturally when parent closes it
+	case <-stdioDone:
+		// Stdio handler finished (stdin closed by parent)
 	case <-s.shutdown:
-		log.Println("Shutdown requested")
-		os.Stdin.Close()
+		// Shutdown requested
 	}
 
 	return s.Stop()
@@ -198,11 +202,19 @@ func (s *Server) handleStdio() {
 		s.handleJSONRPCRequest(&request)
 	}
 
+	// Scanner exits when stdin reaches EOF (parent closes it)
 	if err := scanner.Err(); err != nil && err != io.EOF {
 		log.Printf("Scanner error: %v", err)
 	}
 
-	// Don't close shutdown here - let Stop() handle it to avoid double-close
+	// Signal shutdown when stdin closes
+	select {
+	case <-s.shutdown:
+		// Already shutting down
+	default:
+		close(s.shutdown)
+	}
+
 	log.Println("Stdio handler finished")
 }
 
