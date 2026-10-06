@@ -1,11 +1,12 @@
 # Terminal Wingman MCP Server
 
-A read-only terminal access MCP (Model Context Protocol) server for GNU `screen` sessions. Provides safe, structured access to screen windows and scrollback history with authentication and rate limiting.
+A terminal access MCP (Model Context Protocol) server for GNU `screen` sessions. Provides safe, structured access to screen windows and scrollback history with authentication and rate limiting. It is read-only by default. You can turn on an optional write mode with `--allow-input`, which adds a `send_keys` tool for typing commands into a window.
 
 ## Features
 
 - **Read-only terminal access**: Read current screen and scrollback history
 - **Window management**: List windows and switch between them
+- **Optional write mode**: a `send_keys` tool that types into a window as if typed at the keyboard. It is turned on with `--allow-input` and is off by default. The typed text is checked against what appears on the window and resent if characters are dropped, so a command either arrives complete or returns an error
 - **.screenrc awareness**: Automatically reads `defscrollback` settings
 - **Multiple authentication methods**: None, password, or token-based
 - **Rate limiting**: Prevent abuse with configurable limits
@@ -81,6 +82,7 @@ Flags:
   --rate-limit-burst int        Maximum burst size (default: 20)
   --log-level string            Logging level (DEBUG, INFO, WARNING, ERROR) (default: "INFO")
   --health-check                Enable health check endpoint at /health
+  --allow-input                 Enable write tools (send_keys) that inject keystrokes into windows (default: read-only)
 ```
 
 ## MCP Tools
@@ -133,6 +135,22 @@ Switch to a specific window.
 curl -X POST http://localhost:8080/mcp/tools/use_window \
   -H "Content-Type: application/json" \
   -d '{"window_id": "12"}'
+```
+
+### `send_keys` (write mode)
+Type text into a window as if entered at the keyboard, optionally submitting it with Enter. This tool is only available when the server is started with `--allow-input`. Without that flag the tool is not advertised and any call is rejected.
+
+**Parameters**:
+- `text` (required): Text to type into the window
+- `window_id` (optional): Window ID/number to send to (defaults to the current window)
+- `enter` (optional, default `true`): Append a carriage return to submit the input
+- `verify` (optional, default `true`): Before submitting, confirm the text appeared on the window and resend it if characters were dropped. If it cannot confirm the full text, it returns an error instead of sending a partial command. Set it to `false` for input that does not echo, such as passwords
+
+**Example** (server must be running with `--allow-input`):
+```bash
+curl -X POST http://localhost:8080/mcp/tools/send_keys \
+  -H "Content-Type: application/json" \
+  -d '{"text": "ls -la", "window_id": "12", "enter": true}'
 ```
 
 # IDE Integration
@@ -233,6 +251,88 @@ Add to your `~/.claude.json`
 }
 ```
 
+## Write Mode (enabling `send_keys`)
+
+Write mode is **off by default**. Start the server with `--allow-input` to expose the `send_keys` tool. A common setup is to register a read-only and a read-write server separately so write access is explicit.
+
+### Option A: same binary, two servers (differ only by `--allow-input`)
+
+```json
+{
+  "mcpServers": {
+    "terminal-wingman": {
+      "command": "/path/to/terminal-wingman",
+      "args": ["--session", "work", "--transport", "stdio"]
+    },
+    "terminal-wingman-rw": {
+      "command": "/path/to/terminal-wingman",
+      "args": ["--session", "work", "--transport", "stdio", "--allow-input"]
+    }
+  }
+}
+```
+
+### Option B: separate RO and RW binaries
+
+Build a second, identically-compiled binary under a distinct name so the read-only and read-write servers can never be confused (the read-write one is just the same binary invoked with `--allow-input`):
+
+```bash
+go build -o terminal-wingman    ./cmd   # read-only
+go build -o terminal-wingman-rw ./cmd   # read-write (run with --allow-input)
+```
+
+```json
+{
+  "mcpServers": {
+    "terminal-wingman": {
+      "command": "/path/to/terminal-wingman",
+      "args": ["--session", "work", "--transport", "stdio"]
+    },
+    "terminal-wingman-rw": {
+      "command": "/path/to/terminal-wingman-rw",
+      "args": ["--session", "work", "--transport", "stdio", "--allow-input"]
+    }
+  }
+}
+```
+
+With either option the tools are namespaced per server (e.g. `terminal-wingman-rw`'s `send_keys`), so the agent reads through the read-only server and only writes through the read-write one.
+
+Once connected, the agent calls `send_keys` like any other tool. Example argument payloads:
+
+```jsonc
+// run a command in the current window (Enter is appended by default)
+{ "text": "ls -la" }
+
+// target a specific window
+{ "text": "emerge --info", "window_id": "3", "enter": true }
+
+// type without submitting, and skip echo verification (e.g. a non-echoing prompt)
+{ "text": "y", "window_id": "3", "enter": false, "verify": false }
+```
+
+Raw stdio (JSON-RPC) call, for testing outside an IDE:
+
+```bash
+printf '%s\n' \
+ '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli","version":"1.0"}}}' \
+ '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+ '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"send_keys","arguments":{"text":"ls -la","window_id":"0","enter":true}}}' \
+ | ./terminal-wingman --session work --transport stdio --allow-input
+```
+
+Or over HTTP (server started with `--allow-input`):
+
+```bash
+curl -X POST http://localhost:8080/mcp/tools/send_keys \
+  -H "Content-Type: application/json" \
+  -d '{"text": "ls -la", "window_id": "0", "enter": true}'
+```
+
+Notes:
+- Keystrokes are injected with `screen -X stuff`. The text is passed as a single argument and never runs through a host shell, so it cannot run commands on the host. Only the program running in the target window interprets it.
+- `verify` (default `true`) is meant for single-line input that echoes, such as shell commands. It types the text, confirms it appeared on the window, resends it if characters were dropped, and then submits. Set `verify` to `false` for input that does not echo.
+
 ## Scrollback Configuration
 
 Terminal Wingman automatically reads your `~/.screenrc` file for the `defscrollback` setting:
@@ -256,7 +356,8 @@ http://localhost:8081/health
 
 ## Security Notes
 
-- All operations are read-only except `use_window` which switches window focus
+- Operations are read-only except for `use_window`, which switches window focus, and `send_keys`, which types into a window. `send_keys` is only available when the server is started with `--allow-input`, and that flag is off by default. Without it the tool is not advertised and any call is rejected
+- `send_keys` passes its text as a single argument to `screen -X stuff`, so it never goes through a host shell and cannot run commands on the host. Only the program in the target window interprets the text
 - Uses screen's `hardcopy` command for safe content capture
 - All screen commands have timeout protection
 - Temporary files are automatically cleaned up
