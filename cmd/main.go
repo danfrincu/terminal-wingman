@@ -35,6 +35,7 @@ func init() {
 	rootCmd.Flags().IntVar(&config.Server.Port, "server-port", 8080, "MCP server port")
 	rootCmd.Flags().StringVar(&config.Server.Transport, "transport", "streamable-http", "Transport protocol (stdio, streamable-http)")
 	rootCmd.Flags().BoolVar(&config.Server.HealthCheck, "health-check", false, "Enable health check endpoint at /health")
+	rootCmd.Flags().BoolVar(&config.Server.AllowInput, "allow-input", false, "Enable write tools (send_keys) that inject keystrokes into windows (default: read-only)")
 
 	// Logging flags
 	rootCmd.Flags().StringVar(&config.LogLevel, "log-level", "INFO", "Logging level (DEBUG, INFO, WARNING, ERROR)")
