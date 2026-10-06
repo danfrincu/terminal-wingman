@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -228,56 +229,45 @@ func (m *Manager) fetchWindowsList() ([]types.WindowInfo, error) {
 	return parseWindowsList(output), nil
 }
 
-// parseWindowsList parses screen windows output
-// Format: "0 term  1 build  2 cursor  3* todo  4- git"
+// windowEntrySep splits the `screen -Q windows` output into per-window entries.
+// Screen separates entries with two spaces, while a single space separates a
+// window's number+flags from its (possibly multi-word) title.
+var windowEntrySep = regexp.MustCompile(`\s{2,}`)
+
+// windowEntryRe pulls the number, flag characters and title out of one entry.
+// Screen renders each window as "<num><flags> <title>", where the flags follow
+// the number with no separator and may be any of screen's status characters
+// (e.g. '*' current, '-' previous, '$' login, '@' monitored, '!' bell, 'L'
+// logged). The title is optional and may itself contain spaces and flag-like
+// characters such as '$'.
+var windowEntryRe = regexp.MustCompile(`^(\d+)(\S*)(?: (.*))?$`)
+
+// parseWindowsList parses the output of `screen -Q windows`, e.g.
+// "0$ vim notes  1-$ bash  2*$ top  3$ 3".
 func parseWindowsList(output string) []types.WindowInfo {
 	var windows []types.WindowInfo
-	fields := strings.Fields(output)
 
-	for i := 0; i < len(fields); i++ {
-		field := fields[i]
-
-		// Check if this field is a window number
-		windowNum := ""
-		if num, err := strconv.Atoi(field); err == nil {
-			windowNum = strconv.Itoa(num)
-		} else {
-			// Check if field ends with * or - (active indicators)
-			if strings.HasSuffix(field, "*") || strings.HasSuffix(field, "-") {
-				// Extract number from field like "3*"
-				numPart := field[:len(field)-1]
-				if num, err := strconv.Atoi(numPart); err == nil {
-					windowNum = strconv.Itoa(num)
-				}
-			}
+	for _, entry := range windowEntrySep.Split(strings.TrimSpace(output), -1) {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
 		}
 
-		if windowNum != "" {
-			// This is a window number, next field (if exists) is the name
-			name := windowNum
-			active := strings.HasSuffix(field, "*")
-
-			// Check if next field is the window name
-			if i+1 < len(fields) {
-				nextField := fields[i+1]
-				// If next field is not a number, it's the name
-				if _, err := strconv.Atoi(nextField); err != nil {
-					// Check if it has active indicator
-					if strings.HasSuffix(nextField, "*") || strings.HasSuffix(nextField, "-") {
-						name = nextField
-						active = strings.HasSuffix(nextField, "*")
-					} else {
-						name = nextField
-					}
-				}
-			}
-
-			windows = append(windows, types.WindowInfo{
-				ID:     windowNum,
-				Name:   name,
-				Active: active,
-			})
+		m := windowEntryRe.FindStringSubmatch(entry)
+		if m == nil {
+			continue
 		}
+
+		num, flags, title := m[1], m[2], m[3]
+		if title == "" {
+			title = num
+		}
+
+		windows = append(windows, types.WindowInfo{
+			ID:     num,
+			Name:   title,
+			Active: strings.Contains(flags, "*"),
+		})
 	}
 
 	return windows
@@ -464,6 +454,149 @@ func (m *Manager) SetWindow(windowID string) error {
 	m.windowsCache.mu.Unlock()
 
 	return nil
+}
+
+// buildStuffPayload builds the string passed to screen's "stuff" command.
+// The text is injected into the window's input queue verbatim; when enter is
+// true a carriage return is appended so the line is submitted.
+func buildStuffPayload(text string, enter bool) string {
+	if enter {
+		return text + "\r"
+	}
+	return text
+}
+
+// Tuning for reliable keystroke delivery.
+const (
+	// sendMaxAttempts caps how many times we re-type a line whose echo did not
+	// come back intact (screen's "stuff" can drop leading bytes on a busy,
+	// attached window).
+	sendMaxAttempts = 5
+	// sendEchoDelay is how long we wait for typed input to echo onto the display
+	// before capturing it for verification.
+	sendEchoDelay = 80 * time.Millisecond
+	// readlineKillLine is Ctrl-U (NAK); in a readline shell it discards the
+	// current input line, letting us clear a partially-delivered command before
+	// retrying.
+	readlineKillLine = "\x15"
+)
+
+// stripWhitespace removes spaces, tabs, carriage returns and newlines so that
+// echoed input can be compared regardless of terminal line wrapping, trailing
+// padding, or a space lost at a wrap boundary.
+func stripWhitespace(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case ' ', '\t', '\r', '\n':
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// stuff injects s into a window's input queue via screen's "stuff" command.
+// exec.Command passes s as a single argv element (no shell), so there is no
+// host-side shell-injection risk; the text is only ever interpreted by the
+// target window's own program.
+func (m *Manager) stuff(windowID, s string) error {
+	args := []string{"-S", m.sessionName}
+	if windowID != "" {
+		args = append(args, "-p", windowID)
+	}
+	args = append(args, "-X", "stuff", s)
+
+	cmd := exec.Command("screen", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to send keys to window %q: %w (stderr: %s)", windowID, err, stderr.String())
+	}
+	return nil
+}
+
+// SendKeys types text into a window as if entered at the keyboard, using
+// screen's "stuff" command. When enter is true a carriage return is sent after
+// the text so the line is submitted. An empty windowID targets the session's
+// current window.
+//
+// When verify is true (the default for single-line text), SendKeys confirms the
+// text actually echoed onto the window before submitting, and retries after
+// clearing the line if screen dropped bytes. It either delivers the full text
+// or returns an error with the input left unexecuted — it never silently sends
+// a partial command. Verification is skipped for multi-line text or text that
+// carries its own control bytes, and when verify is false.
+//
+// This is a write operation: callers must gate it behind the AllowInput config.
+func (m *Manager) SendKeys(windowID, text string, enter, verify bool) error {
+	// Validate window exists when one is specified.
+	if windowID != "" {
+		windows, err := m.ListWindows()
+		if err != nil {
+			return fmt.Errorf("failed to list windows: %w", err)
+		}
+
+		found := false
+		for _, win := range windows {
+			if win.ID == windowID {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return fmt.Errorf("window '%s' not found in session '%s'", windowID, m.sessionName)
+		}
+	}
+
+	want := stripWhitespace(text)
+
+	// Fast path: nothing meaningful to verify (verification only works for a
+	// single echoed line of visible characters). Send once, best effort.
+	if !verify || want == "" || strings.ContainsAny(text, "\r\n") {
+		if err := m.stuff(windowID, buildStuffPayload(text, enter)); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// Reliable path: type, confirm the echo, retry on dropped bytes.
+	for attempt := 1; attempt <= sendMaxAttempts; attempt++ {
+		if attempt > 1 {
+			// A previous attempt left partial text on the input line; discard it
+			// before retyping so retries don't stack into a corrupted command.
+			if err := m.stuff(windowID, readlineKillLine); err != nil {
+				return err
+			}
+			time.Sleep(sendEchoDelay)
+		}
+
+		if err := m.stuff(windowID, text); err != nil {
+			return err
+		}
+		time.Sleep(sendEchoDelay)
+
+		content, err := m.captureWindow(windowID, false)
+		if err != nil {
+			return fmt.Errorf("failed to verify sent keys: %w", err)
+		}
+
+		if strings.HasSuffix(stripWhitespace(content), want) {
+			if enter {
+				return m.stuff(windowID, "\r")
+			}
+			return nil
+		}
+
+		time.Sleep(time.Duration(attempt) * 40 * time.Millisecond)
+	}
+
+	// Could not confirm the full text landed. Clear whatever partial input we may
+	// have left so a corrupted command can never be executed, then report.
+	_ = m.stuff(windowID, readlineKillLine)
+	return fmt.Errorf("could not reliably send keys to window %q after %d attempts; input was cleared and not executed", windowID, sendMaxAttempts)
 }
 
 // GetWindowInfo returns information about a specific window

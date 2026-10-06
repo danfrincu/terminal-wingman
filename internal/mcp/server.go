@@ -204,6 +204,81 @@ func (s *MCPServer) UseWindow(params map[string]interface{}) (map[string]interfa
 	}, nil
 }
 
+// InputAllowed reports whether write tools (send_keys) are enabled.
+func (s *MCPServer) InputAllowed() bool {
+	return s.config.Server.AllowInput
+}
+
+// SendKeys injects keystrokes into a window. It is a write operation, gated
+// behind the AllowInput config; when disabled it is rejected.
+func (s *MCPServer) SendKeys(params map[string]interface{}) (map[string]interface{}, error) {
+	if !s.InputAllowed() {
+		err := fmt.Errorf("send_keys is disabled: start the server with --allow-input to enable write access")
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+
+	// Handle authentication
+	clientID, err := s.authenticate(params)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+
+	// Handle rate limiting
+	if err := s.checkRateLimit(clientID); err != nil {
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+
+	// Extract text parameter (required)
+	text := ""
+	if t, exists := params["text"]; exists {
+		if tStr, ok := t.(string); ok {
+			text = tStr
+		}
+	}
+	if text == "" {
+		err := fmt.Errorf("text parameter is required")
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+
+	// Extract window_id parameter (optional, defaults to current window)
+	windowID := ""
+	if wid, exists := params["window_id"]; exists {
+		if widStr, ok := wid.(string); ok {
+			windowID = widStr
+		}
+	}
+
+	// Extract enter parameter (optional, defaults to true)
+	enter := true
+	if e, exists := params["enter"]; exists {
+		if eBool, ok := e.(bool); ok {
+			enter = eBool
+		}
+	}
+
+	// Extract verify parameter (optional, defaults to true). When true, SendKeys
+	// confirms the text echoed onto the window and retries on dropped bytes,
+	// rather than silently sending a partial command.
+	verify := true
+	if v, exists := params["verify"]; exists {
+		if vBool, ok := v.(bool); ok {
+			verify = vBool
+		}
+	}
+
+	if err := s.screenManager.SendKeys(windowID, text, enter, verify); err != nil {
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+
+	return map[string]interface{}{
+		"success":   true,
+		"window_id": windowID,
+		"enter":     enter,
+		"verify":    verify,
+		"message":   "Sent keys to window",
+	}, nil
+}
+
 // GetHealthStatus returns the health status of the server
 func (s *MCPServer) GetHealthStatus() *types.HealthStatus {
 	status := &types.HealthStatus{
@@ -250,6 +325,8 @@ func (s *MCPServer) HandleToolCall(toolName string, params map[string]interface{
 		return s.ListWindows(params)
 	case "use_window":
 		return s.UseWindow(params)
+	case "send_keys":
+		return s.SendKeys(params)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", toolName)
 	}

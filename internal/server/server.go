@@ -330,6 +330,37 @@ func (s *Server) handleToolsList(request *JSONRPCRequest) {
 		},
 	}
 
+	// Write tools are only advertised when input is explicitly enabled, so a
+	// read-only server never exposes them.
+	if s.mcpServer.InputAllowed() {
+		tools = append(tools, map[string]interface{}{
+			"name":        "send_keys",
+			"description": "Type text into a screen window as if entered at the keyboard, optionally submitting it with Enter. Requires the server to be started with --allow-input.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"text": map[string]interface{}{
+						"type":        "string",
+						"description": "Text to type into the window (required)",
+					},
+					"window_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Window ID/number to send to (optional, defaults to current)",
+					},
+					"enter": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Append a carriage return to submit the input (optional, default: true)",
+					},
+					"verify": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Confirm the text echoed onto the window and retry on dropped bytes before submitting; fails rather than sending a partial command (optional, default: true). Set false for input that does not echo.",
+					},
+				},
+				"required": []string{"text"},
+			},
+		})
+	}
+
 	response := JSONRPCResponse{
 		JSONRPC: "2.0",
 		ID:      request.ID,

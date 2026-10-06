@@ -34,6 +34,9 @@ type ServerConfig struct {
 	Port        int    `json:"port"`
 	Transport   string `json:"transport"`
 	HealthCheck bool   `json:"health_check"`
+	// AllowInput enables write tools (e.g. send_keys) that inject keystrokes
+	// into screen windows. Off by default so the server stays read-only.
+	AllowInput bool `json:"allow_input"`
 }
 
 // AuthConfig holds authentication configuration
