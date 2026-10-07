@@ -111,3 +111,50 @@ type ToolResult struct {
 	Status int         `json:"status,omitempty"`
 }
 
+// CommandResult is the result of sending a command via send_keys in write mode.
+type CommandResult struct {
+	Command     string `json:"command"`
+	WindowID    string `json:"window_id"`
+	Enter       bool   `json:"enter"`
+	Completed   bool   `json:"completed"`
+	Output      string `json:"output,omitempty"`
+	OutputLines int    `json:"output_lines,omitempty"`
+	CmdsFile    string `json:"cmds_file,omitempty"`
+	OutputFile  string `json:"output_file,omitempty"`
+	Message     string `json:"message"`
+}
+
+// SearchMatch is a single scrollback line that matched a search.
+type SearchMatch struct {
+	LineNumber int    `json:"line_number"`
+	Line       string `json:"line"`
+	Context    string `json:"context,omitempty"`
+}
+
+// SearchResult is the result of searching a window's scrollback.
+type SearchResult struct {
+	WindowID   string        `json:"window_id"`
+	Pattern    string        `json:"pattern"`
+	Matches    []SearchMatch `json:"matches"`
+	TotalLines int           `json:"total_lines"`
+}
+
+// CommandSummary is one entry of the command buffer (without its full output).
+type CommandSummary struct {
+	Index      int    `json:"index"`
+	Timestamp  string `json:"timestamp"`
+	Command    string `json:"command"`
+	WindowID   string `json:"window_id,omitempty"`
+	OutputFile string `json:"output_file"`
+}
+
+// CommandOutput is a stored command's output resurfaced from history.
+type CommandOutput struct {
+	Index      int    `json:"index"`
+	Command    string `json:"command"`
+	Timestamp  string `json:"timestamp"`
+	WindowID   string `json:"window_id,omitempty"`
+	Output     string `json:"output"`
+	OutputFile string `json:"output_file"`
+}
+

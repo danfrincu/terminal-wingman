@@ -7,6 +7,8 @@ A terminal access MCP (Model Context Protocol) server for GNU `screen` sessions.
 - **Read-only terminal access**: Read current screen and scrollback history
 - **Window management**: List windows and switch between them
 - **Optional write mode**: a `send_keys` tool that types into a window as if typed at the keyboard. It is turned on with `--allow-input` and is off by default. The typed text is checked against what appears on the window and resent if characters are dropped, so a command either arrives complete or returns an error
+- **Command history**: in write mode, each submitted command and its captured output is written under `~/.terminal-wingman` and kept in a recent-commands buffer, so output can be re-fetched and a window's history resumed after a restart
+- **Scrollback search**: find a pattern in a window's scrollback and get back the matching lines with their line numbers, in read-only or write mode
 - **.screenrc awareness**: Automatically reads `defscrollback` settings
 - **Multiple authentication methods**: None, password, or token-based
 - **Rate limiting**: Prevent abuse with configurable limits
@@ -140,17 +142,56 @@ curl -X POST http://localhost:8080/mcp/tools/use_window \
 ### `send_keys` (write mode)
 Type text into a window as if entered at the keyboard, optionally submitting it with Enter. This tool is only available when the server is started with `--allow-input`. Without that flag the tool is not advertised and any call is rejected.
 
+When the text is a submitted command (`enter` is true), the server records it to the command history, waits for it to finish, and returns the captured output along with the paths of the files it was logged to. See "Command history" below.
+
 **Parameters**:
 - `text` (required): Text to type into the window
 - `window_id` (optional): Window ID/number to send to (defaults to the current window)
 - `enter` (optional, default `true`): Append a carriage return to submit the input
 - `verify` (optional, default `true`): Before submitting, confirm the text appeared on the window and resend it if characters were dropped. If it cannot confirm the full text, it returns an error instead of sending a partial command. Set it to `false` for input that does not echo, such as passwords
+- `wait` (optional, default `5`): Seconds to wait for a submitted command to finish before capturing its output. Completion is detected when the window's shell returns to its prompt. If the command is still running when the wait elapses, the output captured so far is returned and you can read again later for the rest
+
+**Result** (for a submitted command): `completed` (whether it finished within `wait`), `output` and `output_lines`, and `cmds_file` / `output_file` (where it was logged).
 
 **Example** (server must be running with `--allow-input`):
 ```bash
 curl -X POST http://localhost:8080/mcp/tools/send_keys \
   -H "Content-Type: application/json" \
   -d '{"text": "ls -la", "window_id": "12", "enter": true}'
+```
+
+### `command_output` (write mode)
+Return the stored output of a previously sent command from the command history, so you can re-fetch a command's output without reading the screen again.
+
+**Parameters**:
+- `index` (optional, default `0`): How many commands back to fetch, where `0` is the most recent
+
+### `list_commands` (write mode)
+List the recent command buffer, newest first, as summaries (index, timestamp, window, command, and output file) without the full output. Use `command_output` with an index to fetch a command's output.
+
+**Parameters**:
+- `count` (optional): Maximum number of recent commands to return (default: all, up to the 50-entry buffer)
+
+### `load_history` (write mode)
+Merge a window's persisted commands from disk back into the buffer. Use it to resume a window whose history was recorded earlier, for example after a window was closed by accident. Screen reopens a closed window with the same number, so loading that number brings its commands back.
+
+**Parameters**:
+- `window` (required): Window ID/number whose persisted commands to load
+- `count` (optional): Maximum number of that window's commands to load (default: all available)
+
+### `search`
+Search a window's scrollback for a pattern and return the matching lines with their line numbers and surrounding context. The pattern is a regular expression, or a literal substring if it is not a valid regex. This is a read operation, so it works in both read-only and write mode.
+
+**Parameters**:
+- `pattern` (required): Pattern to search for
+- `window_id` (optional): Window ID/number to search (defaults to the current window)
+- `context` (optional, default `0`): Number of context lines to include around each match
+
+**Example**:
+```bash
+curl -X POST http://localhost:8080/mcp/tools/search \
+  -H "Content-Type: application/json" \
+  -d '{"pattern": "error", "window_id": "0", "context": 2}'
 ```
 
 # IDE Integration
@@ -332,6 +373,20 @@ curl -X POST http://localhost:8080/mcp/tools/send_keys \
 Notes:
 - Keystrokes are injected with `screen -X stuff`. The text is passed as a single argument and never runs through a host shell, so it cannot run commands on the host. Only the program running in the target window interprets it.
 - `verify` (default `true`) is meant for single-line input that echoes, such as shell commands. It types the text, confirms it appeared on the window, resends it if characters were dropped, and then submits. Set `verify` to `false` for input that does not echo.
+
+## Command history
+
+In write mode the server keeps a trail of every submitted command and its output. This lets you re-fetch a command's output later and resume a window's history after a restart.
+
+Files are written under `~/.terminal-wingman/` (created if it does not exist), one pair per command:
+- `.<user>-<timestamp>-window_id_<n>.cmds` holds the command
+- `.<user>-<timestamp>-window_id_<n>.cmds.output` holds its output
+
+`<user>` is the account the server runs as, `<timestamp>` (`YYYY-MM-DD_HH-MM-SS`) is when the command ran, and `<n>` is the window it ran in. So ten commands produce twenty files, and the name shows which window each belongs to.
+
+In memory the server keeps the most recent 50 commands as a buffer, which `command_output` and `list_commands` read from. On startup the buffer is seeded from disk, but only with commands whose window is still open in the session, so a fresh server reflects the windows you actually have. Commands from windows that are gone stay on disk and are not loaded automatically. Use `load_history` with a window number to pull those back in on demand, which is how you resume after accidentally closing a window.
+
+Completion and capture work without injecting anything into the window. When a command is submitted, the server finds that window's shell and watches the terminal's foreground process group; the command is finished when the foreground returns to the shell's prompt. The output is then read from the window by locating the command's own echo line and taking what follows it. If a command is still running when `wait` elapses, the output captured so far is stored and refreshed the next time you read.
 
 ## Scrollback Configuration
 

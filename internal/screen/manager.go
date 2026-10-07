@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"terminal-wingman/internal/history"
 	"terminal-wingman/pkg/types"
 	"time"
 )
@@ -32,7 +33,14 @@ type Manager struct {
 	maxScrollback     int
 	defaultScrollback int
 	windowsCache      *windowsCache
+	history           *history.History
 	mu                sync.RWMutex
+}
+
+// SetHistory attaches a command-history recorder (write mode only). When nil,
+// SendCommand behaves like a plain SendKeys with no recording or capture.
+func (m *Manager) SetHistory(h *history.History) {
+	m.history = h
 }
 
 // windowsCache caches the list of windows

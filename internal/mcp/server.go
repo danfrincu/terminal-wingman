@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"terminal-wingman/internal/auth"
+	"terminal-wingman/internal/history"
 	"terminal-wingman/internal/ratelimit"
 	"terminal-wingman/internal/screen"
 	"terminal-wingman/pkg/types"
@@ -42,6 +43,20 @@ func NewMCPServer(config *types.Config, screenManager *screen.Manager) (*MCPServ
 		// Start cleanup routine for stale keys
 		server.rateLimiter.StartCleanupRoutine(time.Hour, 24*time.Hour)
 		log.Printf("Rate limiting enabled: %.1f requests/second, burst %d", config.RateLimit.Rate, config.RateLimit.Burst)
+	}
+
+	// Set up command history for write mode. It records each submitted command
+	// and its output under ~/.terminal-wingman and keeps the last commands in a
+	// buffer seeded from disk.
+	if config.Server.AllowInput {
+		if dir, derr := history.DefaultDir(); derr == nil {
+			if h, herr := history.New(dir, screenManager.WindowLive); herr == nil {
+				screenManager.SetHistory(h)
+				log.Printf("Command history enabled at %s", dir)
+			} else {
+				log.Printf("Command history disabled: %v", herr)
+			}
+		}
 	}
 
 	return server, nil
@@ -266,16 +281,216 @@ func (s *MCPServer) SendKeys(params map[string]interface{}) (map[string]interfac
 		}
 	}
 
-	if err := s.screenManager.SendKeys(windowID, text, enter, verify); err != nil {
+	// Extract wait parameter (optional, default 5 seconds). Caps how long we wait
+	// for a submitted command to finish before capturing its output.
+	wait := 5 * time.Second
+	if w, exists := params["wait"]; exists {
+		switch v := w.(type) {
+		case float64:
+			if v > 0 {
+				wait = time.Duration(v * float64(time.Second))
+			}
+		case int:
+			if v > 0 {
+				wait = time.Duration(v) * time.Second
+			}
+		}
+	}
+
+	result, err := s.screenManager.SendCommand(windowID, text, enter, verify, wait)
+	if err != nil {
 		return map[string]interface{}{"error": err.Error()}, err
 	}
 
-	return map[string]interface{}{
+	resp := map[string]interface{}{
 		"success":   true,
-		"window_id": windowID,
-		"enter":     enter,
+		"window_id": result.WindowID,
+		"enter":     result.Enter,
 		"verify":    verify,
-		"message":   "Sent keys to window",
+		"completed": result.Completed,
+		"message":   result.Message,
+	}
+	if result.Output != "" {
+		resp["output"] = result.Output
+		resp["output_lines"] = result.OutputLines
+	}
+	if result.CmdsFile != "" {
+		resp["cmds_file"] = result.CmdsFile
+		resp["output_file"] = result.OutputFile
+	}
+	return resp, nil
+}
+
+// CommandOutput resurfaces a stored command's output by recency index (0 = most
+// recent). Write mode only.
+func (s *MCPServer) CommandOutput(params map[string]interface{}) (map[string]interface{}, error) {
+	if !s.InputAllowed() {
+		err := fmt.Errorf("command_output is disabled: start the server with --allow-input")
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+	clientID, err := s.authenticate(params)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+	if err := s.checkRateLimit(clientID); err != nil {
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+
+	index := 0
+	if v, exists := params["index"]; exists {
+		switch n := v.(type) {
+		case float64:
+			index = int(n)
+		case int:
+			index = n
+		}
+	}
+
+	out, err := s.screenManager.CommandOutput(index)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+	return map[string]interface{}{
+		"index":       out.Index,
+		"command":     out.Command,
+		"timestamp":   out.Timestamp,
+		"window_id":   out.WindowID,
+		"output":      out.Output,
+		"output_file": out.OutputFile,
+	}, nil
+}
+
+// ListCommands returns the command buffer (newest first) as summaries. Write
+// mode only.
+func (s *MCPServer) ListCommands(params map[string]interface{}) (map[string]interface{}, error) {
+	if !s.InputAllowed() {
+		err := fmt.Errorf("list_commands is disabled: start the server with --allow-input")
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+	clientID, err := s.authenticate(params)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+	if err := s.checkRateLimit(clientID); err != nil {
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+
+	count := 0
+	if v, exists := params["count"]; exists {
+		switch n := v.(type) {
+		case float64:
+			count = int(n)
+		case int:
+			count = n
+		}
+	}
+
+	list, err := s.screenManager.ListCommands(count)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+	return map[string]interface{}{
+		"count":    len(list),
+		"commands": list,
+	}, nil
+}
+
+// LoadHistory merges a window's persisted commands from disk into the buffer so
+// a reopened window's history can be resumed. Write mode only.
+func (s *MCPServer) LoadHistory(params map[string]interface{}) (map[string]interface{}, error) {
+	if !s.InputAllowed() {
+		err := fmt.Errorf("load_history is disabled: start the server with --allow-input")
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+	clientID, err := s.authenticate(params)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+	if err := s.checkRateLimit(clientID); err != nil {
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+
+	window := ""
+	if w, exists := params["window"]; exists {
+		if ws, ok := w.(string); ok {
+			window = ws
+		}
+	}
+	if window == "" {
+		err := fmt.Errorf("window parameter is required")
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+
+	count := 0
+	if v, exists := params["count"]; exists {
+		switch n := v.(type) {
+		case float64:
+			count = int(n)
+		case int:
+			count = n
+		}
+	}
+
+	added, err := s.screenManager.LoadWindowHistory(window, count)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+	return map[string]interface{}{
+		"window_id": window,
+		"loaded":    added,
+		"message":   fmt.Sprintf("Loaded %d command(s) from window %s into the buffer", added, window),
+	}, nil
+}
+
+// Search scans a window's scrollback for a pattern and returns matching lines
+// with their line numbers. Available in read-only and write mode.
+func (s *MCPServer) Search(params map[string]interface{}) (map[string]interface{}, error) {
+	clientID, err := s.authenticate(params)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+	if err := s.checkRateLimit(clientID); err != nil {
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+
+	pattern := ""
+	if p, exists := params["pattern"]; exists {
+		if ps, ok := p.(string); ok {
+			pattern = ps
+		}
+	}
+	if pattern == "" {
+		err := fmt.Errorf("pattern parameter is required")
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+
+	windowID := ""
+	if wid, exists := params["window_id"]; exists {
+		if widStr, ok := wid.(string); ok {
+			windowID = widStr
+		}
+	}
+
+	contextLines := 0
+	if c, exists := params["context"]; exists {
+		switch n := c.(type) {
+		case float64:
+			contextLines = int(n)
+		case int:
+			contextLines = n
+		}
+	}
+
+	result, err := s.screenManager.Search(windowID, pattern, contextLines)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}, err
+	}
+	return map[string]interface{}{
+		"window_id":   result.WindowID,
+		"pattern":     result.Pattern,
+		"total_lines": result.TotalLines,
+		"match_count": len(result.Matches),
+		"matches":     result.Matches,
 	}, nil
 }
 
@@ -327,6 +542,14 @@ func (s *MCPServer) HandleToolCall(toolName string, params map[string]interface{
 		return s.UseWindow(params)
 	case "send_keys":
 		return s.SendKeys(params)
+	case "command_output":
+		return s.CommandOutput(params)
+	case "list_commands":
+		return s.ListCommands(params)
+	case "load_history":
+		return s.LoadHistory(params)
+	case "search":
+		return s.Search(params)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", toolName)
 	}

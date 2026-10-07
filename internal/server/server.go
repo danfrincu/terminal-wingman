@@ -328,6 +328,28 @@ func (s *Server) handleToolsList(request *JSONRPCRequest) {
 				"required": []string{"window_id"},
 			},
 		},
+		{
+			"name":        "search",
+			"description": "Search a window's scrollback for a pattern (a regular expression, or a literal substring if it is not a valid regex) and return matching lines with their line numbers and surrounding context.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"pattern": map[string]interface{}{
+						"type":        "string",
+						"description": "Pattern to search for (required)",
+					},
+					"window_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Window ID/number to search (optional, defaults to current)",
+					},
+					"context": map[string]interface{}{
+						"type":        "number",
+						"description": "Number of context lines to include around each match (optional, default: 0)",
+					},
+				},
+				"required": []string{"pattern"},
+			},
+		},
 	}
 
 	// Write tools are only advertised when input is explicitly enabled, so a
@@ -355,8 +377,56 @@ func (s *Server) handleToolsList(request *JSONRPCRequest) {
 						"type":        "boolean",
 						"description": "Confirm the text echoed onto the window and retry on dropped bytes before submitting; fails rather than sending a partial command (optional, default: true). Set false for input that does not echo.",
 					},
+					"wait": map[string]interface{}{
+						"type":        "number",
+						"description": "Seconds to wait for a submitted command to finish before capturing its output (optional, default: 5). If it is still running, partial output is captured and you can read again later.",
+					},
 				},
 				"required": []string{"text"},
+			},
+		})
+		tools = append(tools, map[string]interface{}{
+			"name":        "command_output",
+			"description": "Return the stored output of a previously sent command, by recency index (0 = most recent). Requires the server to be started with --allow-input.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"index": map[string]interface{}{
+						"type":        "number",
+						"description": "How many commands back to fetch (optional, default: 0 = the most recent command)",
+					},
+				},
+			},
+		})
+		tools = append(tools, map[string]interface{}{
+			"name":        "list_commands",
+			"description": "List the recent command buffer (newest first) as summaries: index, timestamp, window, command, and output file, without the full output. Use command_output with an index to fetch a command's output. Requires the server to be started with --allow-input.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"count": map[string]interface{}{
+						"type":        "number",
+						"description": "Maximum number of recent commands to return (optional, default: all, up to the 50-entry buffer)",
+					},
+				},
+			},
+		})
+		tools = append(tools, map[string]interface{}{
+			"name":        "load_history",
+			"description": "Merge a window's persisted commands from disk into the buffer so a reopened window's history can be resumed (useful after a window was closed accidentally; screen reopens it with the same number). Requires the server to be started with --allow-input.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"window": map[string]interface{}{
+						"type":        "string",
+						"description": "Window ID/number whose persisted commands to load (required)",
+					},
+					"count": map[string]interface{}{
+						"type":        "number",
+						"description": "Maximum number of that window's commands to load (optional, default: all available)",
+					},
+				},
+				"required": []string{"window"},
 			},
 		})
 	}
